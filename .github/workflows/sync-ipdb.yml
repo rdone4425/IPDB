@@ -1,0 +1,36 @@
+name: Sync IPDB from upstream
+
+on:
+  # 手动触发
+  workflow_dispatch:
+
+  # 定时任务：每2小时检查一次更新
+  schedule:
+    - cron: '0 */1 * * *'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/ymyuuu/IPDB.git || true
+          git fetch upstream
+
+      - name: Merge upstream changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git merge upstream/main --allow-unrelated-histories -m "Sync from upstream IPDB" || echo "No changes to merge"
+
+      - name: Push changes
+        run: |
+          git push origin main || echo "Nothing to push"
