@@ -1,5 +1,6 @@
 import os
 import requests
+import time
 
 # ------------------------- 配置区 -------------------------
 # 从环境变量中获取 Cloudflare API Token，可以是单个或多个（逗号分割）
@@ -71,21 +72,33 @@ def update_dns_record(api_token: str, zone_id: str, subdomain: str, domain: str,
     full_record_name = domain if subdomain == "@" else f"{subdomain}.{domain}"
     
     if operation == "delete":
-        # 循环删除所有匹配的记录
-        while True:
-            query_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type={dns_type}&name={full_record_name}"
-            response = requests.get(query_url, headers=headers)
-            response.raise_for_status()
-            records = response.json().get("result", [])
-            if not records:
-                break  # 无匹配记录则退出
-            for record in records:
+        # 获取所有匹配的记录
+        query_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type={dns_type}&name={full_record_name}"
+        response = requests.get(query_url, headers=headers)
+        response.raise_for_status()
+        records = response.json().get("result", [])
+
+        if not records:
+            print(f"未找到需要删除的 {subdomain} {dns_type} 记录")
+            return
+
+        # 删除所有匹配的记录
+        delete_count = 0
+        for record in records:
+            try:
                 delete_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{record['id']}"
                 del_resp = requests.delete(delete_url, headers=headers)
                 del_resp.raise_for_status()
-                print(f"删除 {subdomain} {dns_type} 记录: {record['id']}")
+                print(f"✓ 删除 {subdomain} {dns_type} 记录: {record['content']} (ID: {record['id']})")
+                delete_count += 1
+                time.sleep(0.5)  # 添加延迟避免 API 限流
+            except Exception as e:
+                print(f"✗ 删除记录失败 {record['id']}: {str(e)}")
+
+        print(f"共删除 {delete_count} 条 {subdomain} {dns_type} 记录")
     elif operation == "add" and ip_list is not None:
         # 针对每个 IP 地址添加新的 DNS 记录
+        add_count = 0
         for ip in ip_list:
             payload = {
                 "type": dns_type,
@@ -94,12 +107,23 @@ def update_dns_record(api_token: str, zone_id: str, subdomain: str, domain: str,
                 "ttl": 1,         # 自动 TTL
                 "proxied": False  # 不启用 Cloudflare 代理
             }
-            response = requests.post(f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records",
-                                     json=payload, headers=headers)
-            if response.status_code == 200:
-                print(f"添加 {subdomain} {dns_type} 记录: {ip}")
-            else:
-                print(f"添加 {dns_type} 记录失败: {subdomain} IP {ip} 错误 {response.status_code} {response.text}")
+            try:
+                response = requests.post(f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records",
+                                         json=payload, headers=headers)
+                response.raise_for_status()
+                result = response.json()
+                if result.get("success"):
+                    print(f"✓ 添加 {subdomain} {dns_type} 记录: {ip}")
+                    add_count += 1
+                else:
+                    errors = result.get("errors", [])
+                    error_msg = errors[0].get("message", "未知错误") if errors else "未知错误"
+                    print(f"✗ 添加 {subdomain} {dns_type} 记录失败: {ip} - {error_msg}")
+                time.sleep(0.5)  # 添加延迟避免 API 限流
+            except Exception as e:
+                print(f"✗ 添加 {subdomain} {dns_type} 记录异常: {ip} - {str(e)}")
+
+        print(f"共添加 {add_count} 条 {subdomain} {dns_type} 记录")
 
 def main():
     try:
@@ -117,9 +141,12 @@ def main():
                     dns_type = dns_record_map.get(version_key)
                     if not dns_type:
                         continue
-                    ips = fetch_ip_list(url)  # 获取 IP 列表（仅前两行）
+                    ips = fetch_ip_list(url)  # 获取 IP 列表(仅前两行)
+                    print(f"\n处理 {subdomain} ({dns_type})...")
                     # 删除旧的 DNS 记录
                     update_dns_record(token, zone_id, subdomain, domain, dns_type, "delete")
+                    # 等待一段时间确保删除操作完成
+                    time.sleep(1)
                     # 添加新的 DNS 记录
                     if ips:
                         update_dns_record(token, zone_id, subdomain, domain, dns_type, "add", ips)
