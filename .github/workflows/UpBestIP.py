@@ -116,7 +116,7 @@ def update_dns_record(api_token: str, zone_id: str, subdomain: str, domain: str,
                 "type": dns_type,
                 "name": full_record_name,
                 "content": ip,
-                "ttl": 1,         # 自动 TTL
+                "ttl": 60,        # 使用 60 秒 TTL（当 proxied 为 False 时不能使用 1）
                 "proxied": False  # 不启用 Cloudflare 代理
             }
             print(f"正在添加: {dns_type} {full_record_name} -> {ip}")
