@@ -61,7 +61,13 @@ def fetch_zone_info(api_token: str) -> tuple:
     zones = response.json().get("result", [])
     if not zones:
         raise Exception("未找到域区信息")
-    return zones[0]["id"], zones[0]["name"]
+    domain = zones[0]["name"]
+    # 将域名转换为 Punycode（处理中文域名）
+    try:
+        domain = domain.encode('idna').decode('ascii')
+    except Exception as e:
+        print(f"域名编码警告: {e}, 使用原始域名: {domain}")
+    return zones[0]["id"], domain
 
 # 统一处理 DNS 记录操作
 # operation 参数为 "delete" 或 "add"
@@ -155,7 +161,7 @@ def main():
             print(f"开始处理 API Token #{idx}")
             zone_id, domain = fetch_zone_info(token)
             print(f"域区 ID: {zone_id} | 域名: {domain}")
-            
+
             # 遍历所有子域名配置
             for subdomain, version_urls in subdomain_configs.items():
                 # 针对每个版本（如 v4、v6）分别处理
@@ -174,10 +180,12 @@ def main():
                         update_dns_record(token, zone_id, subdomain, domain, dns_type, "add", ips)
                     else:
                         print(f"{subdomain} ({dns_type}) 未获取到 IP")
-            print(f"结束处理 API Token #{idx}")
+            print(f"\n结束处理 API Token #{idx}")
             print("=" * 50 + "\n")
     except Exception as err:
         print(f"错误: {err}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()
