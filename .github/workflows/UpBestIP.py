@@ -46,7 +46,9 @@ def fetch_ip_list(url: str) -> list:
     response = requests.get(url)  # 发送 GET 请求获取数据
     response.raise_for_status()   # 检查响应状态，若请求失败则抛出异常
     ip_lines = response.text.strip().split('\n')
-    return ip_lines[:2]  # 只返回前两行
+    # 清理每个 IP 地址，去除空格和空行
+    cleaned_ips = [ip.strip() for ip in ip_lines if ip.strip()]
+    return cleaned_ips[:2]  # 只返回前两行
 
 # 获取 Cloudflare 第一个域区的信息，返回 (zone_id, domain)
 def fetch_zone_info(api_token: str) -> tuple:
@@ -79,7 +81,16 @@ def update_dns_record(api_token: str, zone_id: str, subdomain: str, domain: str,
         records = response.json().get("result", [])
 
         if not records:
-            print(f"未找到需要删除的 {subdomain} {dns_type} 记录")
+            print(f"未找到需要删除的 {subdomain} {dns_type} 记录 (查询: {full_record_name})")
+            # 列出该子域名的所有记录类型，帮助调试
+            all_query_url = f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?name={full_record_name}"
+            all_response = requests.get(all_query_url, headers=headers)
+            if all_response.status_code == 200:
+                all_records = all_response.json().get("result", [])
+                if all_records:
+                    print(f"  但找到以下其他类型的记录:")
+                    for rec in all_records:
+                        print(f"    - {rec['type']} {rec['name']} -> {rec['content']}")
             return
 
         # 删除所有匹配的记录
@@ -99,6 +110,7 @@ def update_dns_record(api_token: str, zone_id: str, subdomain: str, domain: str,
     elif operation == "add" and ip_list is not None:
         # 针对每个 IP 地址添加新的 DNS 记录
         add_count = 0
+        print(f"准备添加 {len(ip_list)} 条记录到 {full_record_name}")
         for ip in ip_list:
             payload = {
                 "type": dns_type,
@@ -107,18 +119,28 @@ def update_dns_record(api_token: str, zone_id: str, subdomain: str, domain: str,
                 "ttl": 1,         # 自动 TTL
                 "proxied": False  # 不启用 Cloudflare 代理
             }
+            print(f"正在添加: {dns_type} {full_record_name} -> {ip}")
             try:
                 response = requests.post(f"https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records",
                                          json=payload, headers=headers)
-                response.raise_for_status()
                 result = response.json()
-                if result.get("success"):
+
+                if response.status_code == 200 and result.get("success"):
                     print(f"✓ 添加 {subdomain} {dns_type} 记录: {ip}")
                     add_count += 1
                 else:
+                    # 打印详细的错误信息
                     errors = result.get("errors", [])
-                    error_msg = errors[0].get("message", "未知错误") if errors else "未知错误"
-                    print(f"✗ 添加 {subdomain} {dns_type} 记录失败: {ip} - {error_msg}")
+                    if errors:
+                        for error in errors:
+                            error_code = error.get("code", "unknown")
+                            error_msg = error.get("message", "未知错误")
+                            print(f"✗ 添加 {subdomain} {dns_type} 记录失败: {ip}")
+                            print(f"  错误代码: {error_code}, 错误信息: {error_msg}")
+                    else:
+                        print(f"✗ 添加 {subdomain} {dns_type} 记录失败: {ip} - HTTP {response.status_code}")
+                        print(f"  响应内容: {response.text}")
+
                 time.sleep(0.5)  # 添加延迟避免 API 限流
             except Exception as e:
                 print(f"✗ 添加 {subdomain} {dns_type} 记录异常: {ip} - {str(e)}")
